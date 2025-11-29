@@ -1,0 +1,96 @@
+---
+title: "p8105_hw6_wl3013"
+author: "Wen Li_wl3013"
+date: "2025-11-29"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(forcats)
+```
+
+### Question 1
+```{r}
+# Import dataset
+homicide_df <- read.csv("https://raw.githubusercontent.com/washingtonpost/data-homicides/refs/heads/master/homicide-data.csv")
+
+# Clean data
+clean_df <- homicide_df |> 
+  mutate(
+    city_state = str_c(city, state, sep = ", "),
+    solved = if_else(disposition == "Closed by arrest", 1, 0),
+    victim_age = as.numeric(victim_age)
+  ) |> 
+  # drop problematic cities
+  filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", 
+                            "Kansas City, MO", "Tulsa, AL")) |> 
+  # keep only white / black victims
+  filter(victim_race %in% c("White", "Black")) |> 
+  drop_na(victim_age, victim_sex, victim_race)
+
+# Fit logistic regression for Baltimore, MD
+baltimore_df <- clean_df |> 
+  filter(city_state == "Baltimore, MD")
+
+baltimore_fit <- glm(
+  solved ~ victim_age + victim_sex + victim_race,
+  data = baltimore_df,
+  family = binomial()
+)
+
+# Baltimore: extract OR + CI for male vs female
+baltimore_or <- baltimore_fit |> 
+  broom::tidy(conf.int=T) |> 
+  filter(term == "victim_sexMale") |> 
+  mutate(
+    OR = exp(estimate),
+    CI_low = exp(conf.low),
+    CI_high = exp(conf.high)) |> 
+  select(term, log_OR = estimate, OR, CI_low, CI_high, p.value) |> 
+  knitr::kable(digits = 3)
+
+baltimore_or
+
+# Run glm and extract OR + CI for other cities
+# Write a function for running glm and extract OR + CI
+fit_city_glm <- function(df) {
+  glm(
+    solved ~ victim_age + victim_sex + victim_race,
+    data = df,
+    family = binomial()
+  ) |>
+    broom::tidy(conf.int = TRUE, exponentiate = TRUE) |>
+    filter(term == "victim_sexMale") |>
+    select(term, estimate, conf.low, conf.high)
+}
+
+# Run function for each cities
+city_or_df <- clean_df |>
+  nest(data = -city_state) |>
+  mutate(results = map(data, fit_city_glm)) |>
+  unnest(results)
+
+# Create a plot comparing the OR and CI
+city_or_plot_df <- city_or_df |>
+  arrange(estimate) |>
+  mutate(city_state = fct_inorder(city_state))
+
+ggplot(city_or_plot_df, aes(x = city_state, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  coord_flip() +
+  labs(
+    title = "Adjusted Odds Ratios (Male vs Female Victims)",
+    x = "City",
+    y = "Adjusted Odds Ratio (male vs female)"
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+Cities vary widely in the adjusted odds of a homicide being solved for male vs female victims.
+Most cities have odds ratios close to 1, indicating little difference in clearance likelihood by victim gender after adjusting for age and race. However, a few cities show large OR with wide confidence intervals, suggesting unstable estimates driven by small sample sizes or separation issues in the data. Also, several cities have OR below 1, implying that homicides of male victims may be less likely to be solved compared with female victims, while others show the opposite pattern.
